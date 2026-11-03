@@ -158,23 +158,20 @@ window.addEventListener("DOMContentLoaded", () => {
   const TOPIC = `quiz-kahoot/${ROOM_ID}`;
 
   const QUESTIONS = [
-    { q: "超低延迟系统（ULLS）的端到端处理时间通常在哪个量级？",
-      opts: ["毫秒 ms", "微秒 μs", "纳秒 ns", "皮秒 ps"], answer: 1, time: 20 },
-    { q: "光在 1 纳秒内大约能走多远？",
-      opts: ["3 毫米", "3 厘米", "30 厘米", "3 米"], answer: 2, time: 20 },
-    { q: "按 slide 中数据，顶尖软件系统一次「收到行情→发出报单」耗时约为？",
-      opts: ["150-300 纳秒", "1.5-2.5 微秒", "15-25 微秒", "1.5-2.5 毫秒"], answer: 1, time: 20 },
-    { q: "下列哪种硬件方案的行情解码延迟最低？",
-      opts: ["CPU (Linux)", "CPU (kernel bypass)", "FPGA", "ASIC"], answer: 3, time: 20 },
+    { q: "端到端处理耗时 2.5 微秒，若在单条链路上连续报单（一单发完立刻发下一单），理论上一秒最多可以报多少单？",
+      opts: ["4 万单", "40 万单", "400 万单", "4000 万单"], answer: 1, time: 25 },
+    { q: "芝加哥↔纽约约 1200 km。用微波（走空气，≈3×10⁸ m/s）传信息比用光纤（≈2×10⁸ m/s）大约快多少？",
+      opts: ["约 20 μs", "约 200 μs", "约 2 ms", "约 20 ms"], answer: 2, time: 30 },
     { q: "端到端 FPGA 直通架构能把延迟压到 <200ns，关键是让谁退出了交易关键路径？",
       opts: ["内存", "PCIe", "交换机", "操作系统"], answer: 1, time: 20 },
-    { q: "低延迟交易中，Market Taking（主动交易）系统设计目标是？",
-      opts: ["最慢的不能比很慢", "快的要最快", "延迟越均匀越好", "吞吐量越大越好"], answer: 1, time: 20 },
-    { q: "芝加哥到纽约（约 1200 km）的真空光速理论极限延迟约为？",
-      opts: ["0.4 ms", "4.0 ms", "16 ms", "40 ms"], answer: 1, time: 20 },
-    { q: "slide 介绍九坤 IT 设施，存储容量约为？",
-      opts: ["10 PB+", "100 PB+", "1 EB+", "100 TB+"], answer: 1, time: 20 },
+    { q: "在交易所撮合中，当买卖订单价格相同时，通常按什么规则决定谁先成交？",
+      opts: ["订单数量大的优先", "手续费高的优先", "时间先到的优先（price-time priority）", "随机抽取"], answer: 2, time: 25 },
+    { q: "九坤投资的上海办公室位于？",
+      opts: ["陆家嘴中心", "外滩金融中心 BFC", "北外滩来福士西塔", "静安嘉里中心"], answer: 2, time: 20 },
   ];
+  // 前 5 名得分，之后答对的也有分（slow bonus），答错 0 分
+  const RANK_POINTS = [1000, 800, 600, 400, 200];
+  const CORRECT_BONUS = 100; // 第 6 名及以后答对的分数
   const SHAPES = ["▲","◆","●","■"];
   // 每题前 5 名得分，之后 0 分
   const RANK_POINTS = [1000, 800, 600, 400, 200];
@@ -219,7 +216,7 @@ window.addEventListener("DOMContentLoaded", () => {
               <h2>已加入 <span id="count">0</span> 人</h2>
               <div id="players" class="players"></div>
               <button id="start" style="margin-top:20px;font-size:22px" disabled>开始答题</button>
-              <div class="muted" style="margin-top:8px">至少 1 人才能开始 · 共 ${QUESTIONS.length} 题 · 每题前 5 名得分</div>
+              <div class="muted" style="margin-top:8px">至少 1 人才能开始 · 共 ${QUESTIONS.length} 题 · 前 5 名高分，之后答对也有分</div>
             </div>
           </div>
         </div>`;
@@ -303,7 +300,7 @@ window.addEventListener("DOMContentLoaded", () => {
             <span style="font-size:22px">正确答案：<b>${SHAPES[q.answer]} ${esc(q.opts[q.answer])}</b></span>
           </div>
           <div style="text-align:center;margin-top:12px">
-            <span class="muted">本题前 5 名得分：${RANK_POINTS.join(" / ")}</span>
+            <span class="muted">本题前 5 名：${RANK_POINTS.join(" / ")} 分 · 之后答对：${CORRECT_BONUS} 分</span>
           </div>
           <div style="text-align:center;margin-top:20px">
             <button id="next">${qIdx+1 < QUESTIONS.length ? "查看排行榜" : "查看最终结果"}</button>
@@ -438,7 +435,7 @@ window.addEventListener("DOMContentLoaded", () => {
         if (correct) {
           correctCount++;
           correctRank = correctCount;
-          gain = RANK_POINTS[correctRank - 1] || 0;
+          gain = RANK_POINTS[correctRank - 1] || CORRECT_BONUS;
         }
         const p = players.get(m.id);
         if (p) p.score += gain;
@@ -525,7 +522,7 @@ window.addEventListener("DOMContentLoaded", () => {
             <h2>第 ${m.idx+1} 题</h2>
             <div class="score-pill">${myScore}</div>
           </div>
-          <div style="text-align:center;margin:16px 0;font-size:18px">选择你的答案（前 5 名得分）</div>
+          <div style="text-align:center;margin:16px 0;font-size:18px">选择你的答案（前 5 名高分，之后答对也有分）</div>
           <div class="player-opts">
             ${m.opts.map((_,i) => `<button class="opt c${i}" data-i="${i}">${SHAPES[i]}</button>`).join("")}
           </div>
@@ -548,7 +545,7 @@ window.addEventListener("DOMContentLoaded", () => {
       const rankText = m.correct
         ? (m.correctRank <= 5
             ? `你是第 <b>${m.correctRank}</b> 个答对的，获得 <b>${m.gain}</b> 分`
-            : `你答对了，但不在前 5 名，本题 0 分`)
+            : `你答对了（第 ${m.correctRank} 位），获得 <b>${m.gain}</b> 分`)
         : "本题 0 分";
       app.innerHTML = `
         <div class="card big-feedback ${m.correct ? "ok" : "no"}">
