@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>现场答题 Demo</title>
+<script src="./mqtt.min.js"></script>
+<script src="./qrcode.min.js"></script>
+<script>
+  window.addEventListener("DOMContentLoaded", () => {
+    const missing = [];
+    if (typeof mqtt   === "undefined") missing.push("mqtt.min.js");
+    if (typeof QRCode === "undefined") missing.push("qrcode.min.js");
+    if (missing.length) {
+      document.body.innerHTML =
+        `<div style="padding:24px;color:#fca5a5;font-family:system-ui">
+          本地库加载失败：${missing.join(", ")}。<br>
+          请确认这些文件与 quiz.html 在同一目录，且文件名完全一致（区分大小写）。<br>
+          另外请用本地 http server 打开（如 <code>python3 -m http.server</code>），不要用 file:// 直接双击。
+        </div>`;
+    }
+  });
+</script>
+<style>
+  :root { color-scheme: light; }
+  body { font-family: -apple-system, system-ui, sans-serif; margin: 0; padding: 24px;
+         background: #0f172a; color: #e2e8f0; min-height: 100vh; box-sizing: border-box; }
+  h1 { margin-top: 0; }
+  .card { background:#1e293b; border-radius:12px; padding:20px; margin:12px 0; }
+  button { font-size:18px; padding:12px 20px; margin:6px; border:0; border-radius:8px;
+           background:#3b82f6; color:white; cursor:pointer; }
+  button:disabled { background:#475569; cursor:not-allowed; }
+  .opt { display:block; width:100%; text-align:left; margin:8px 0;
+         background:#334155; }
+  .opt.right { background:#16a34a; }
+  .opt.wrong { background:#dc2626; }
+  input { font-size:16px; padding:10px; border-radius:8px; border:1px solid #475569;
+          background:#0f172a; color:#e2e8f0; width: 200px; }
+  table { width:100%; border-collapse:collapse; }
+  td, th { padding:8px; border-bottom:1px solid #334155; text-align:left; }
+  #qr canvas { background:white; padding:12px; border-radius:8px; }
+  .big { font-size:28px; }
+  .muted { color:#94a3b8; font-size:14px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+window.addEventListener("DOMContentLoaded", () => {
+  if (typeof mqtt === "undefined" || typeof QRCode === "undefined") return;
+// ---------- 配置 ----------
+// 公共 MQTT broker（EMQX 提供的免费测试节点，WebSocket over TLS）
+// 现场使用建议改成自己的 broker，或至少把 ROOM_ID 做成不可猜的随机串。
+const BROKER = "wss://broker.emqx.io:8084/mqtt";
+const ROOM_ID = new URLSearchParams(location.search).get("room")
+             || (location.hash.match(/room=([^&]+)/)?.[1])
+             || "demo-" + Math.random().toString(36).slice(2, 8);
+const TOPIC = `quiz-demo/${ROOM_ID}`;
+
+const QUESTIONS = [
+  { q: "1 + 1 = ?",            opts: ["1","2","3","4"], answer: 1 },
+  { q: "HTTP 默认端口是?",      opts: ["21","22","80","443"], answer: 2 },
+  { q: "下列哪个是 JS 关键字?", opts: ["function","method","sub","def"], answer: 0 },
+];
+
+// ---------- 角色判定 ----------
+// 带 #player 的是手机端；默认是主屏。
+const isPlayer = location.hash.startsWith("#player");
+
+// ---------- 共用 MQTT ----------
+const client = mqtt.connect(BROKER, { clean: true, reconnectPeriod: 2000 });
+const send = (type, data) => client.publish(TOPIC, JSON.stringify({ type, ...data }));
+client.on("connect", () => client.subscribe(TOPIC));
+
+// ---------- 主屏 ----------
+function hostUI() {
+  const app = document.getElementById("app");
+  app.innerHTML = `
+    <h1>现场答题 · 主屏</h1>
+    <div class="card">
+      <div>房间号：<b>${ROOM_ID}</b></div>
+      <div class="muted">手机扫码加入 ↓</div>
+      <div id="qr"></div>
+    </div>
+    <div class="card">
+      <div>已加入：<b id="count">0</b> 人</div>
+      <button id="start">开始 / 下一题</button>
+    </div>
+    <div class="card" id="qbox" style="display:none">
+      <div class="big" id="qtext"></div>
+      <ol id="qopts"></ol>
+      <div id="stat" class="muted"></div>
+    </div>
+    <div class="card">
+      <h3>排行榜</h3>
+      <table><thead><tr><th>#</th><th>昵称</th><th>得分</th><th>最后答题时间</th></tr></thead>
+      <tbody id="board"></tbody></table>
+    </div>
+  `;
+
+  const joinUrl = location.origin + location.pathname + `#player&room=${ROOM_ID}`;
+  QRCode.toCanvas(joinUrl, { width: 240 }, (err, canvas) => {
+    document.getElementById("qr").appendChild(canvas);
+  });
+
+  const players = new Map(); // id -> {name, score, lastAt}
+  let qIdx = -1;
+  let qStartAt = 0;
+  const answers = new Map(); // for current question: id -> {correct, at}
+
+  const refreshBoard = () => {
+    const rows = [...players.entries()]
+      .sort((a,b) => b[1].score - a[1].score || a[1].lastAt - b[1].lastAt);
+    document.getElementById("board").innerHTML = rows.map(([id,p],i) =>
+      `<tr><td>${i+1}</td><td>${p.name}</td><td>${p.score}</td>
+       <td>${p.lastAt ? ((p.lastAt-0)/1000).toFixed(1)+'s' : '-'}</td></tr>`
+    ).join("");
+    document.getElementById("count").textContent = players.size;
+  };
+
+  client.on("message", (_t, buf) => {
+    const m = JSON.parse(buf.toString());
+    if (m.type === "join") {
+      if (!players.has(m.id)) players.set(m.id, { name: m.name, score: 0, lastAt: 0 });
+      // 回播当前题，便于迟到者
+      if (qIdx >= 0) send("question", { idx: qIdx, q: QUESTIONS[qIdx].q, opts: QUESTIONS[qIdx].opts });
+      refreshBoard();
+    }
+    if (m.type === "answer" && m.idx === qIdx && !answers.has(m.id)) {
+      const correct = m.pick === QUESTIONS[qIdx].answer;
+      const dt = m.at - qStartAt;
+      answers.set(m.id, { correct, dt });
+      const p = players.get(m.id);
+      if (p) {
+        // 评分：答对得分，越早分越高
+        if (correct) {
+          const order = [...answers.values()].filter(a => a.correct).length;
+          p.score += Math.max(100 - (order-1)*10, 10);
+        }
+        p.lastAt = dt;
+      }
+      // 把判定回送给该玩家
+      send("result", { to: m.id, idx: qIdx, correct, answer: QUESTIONS[qIdx].answer });
+      updateStat();
+      refreshBoard();
+    }
+  });
+
+  const updateStat = () => {
+    const total = answers.size;
+    const right = [...answers.values()].filter(a => a.correct).length;
+    document.getElementById("stat").textContent =
+      `已答 ${total} / ${players.size}，正确 ${right}（${total ? Math.round(right/total*100):0}%）`;
+  };
+
+  document.getElementById("start").onclick = () => {
+    qIdx++;
+    if (qIdx >= QUESTIONS.length) {
+      alert("答题结束！");
+      qIdx = QUESTIONS.length - 1;
+      return;
+    }
+    answers.clear();
+    qStartAt = Date.now();
+    const q = QUESTIONS[qIdx];
+    document.getElementById("qbox").style.display = "";
+    document.getElementById("qtext").textContent = `第 ${qIdx+1} 题：${q.q}`;
+    document.getElementById("qopts").innerHTML =
+      q.opts.map((o,i) => `<li>${o}</li>`).join("");
+    updateStat();
+    send("question", { idx: qIdx, q: q.q, opts: q.opts });
+  };
+}
+
+// ---------- 手机端 ----------
+function playerUI() {
+  const app = document.getElementById("app");
+  const id = Math.random().toString(36).slice(2, 10);
+  let name = localStorage.getItem("quiz-name") || "";
+  let curIdx = -1;
+
+  const render = (inner) => app.innerHTML = `<h1>答题 · 房间 ${ROOM_ID}</h1>${inner}`;
+
+  const askName = () => {
+    render(`
+      <div class="card">
+        <div>输入昵称加入：</div>
+        <input id="n" value="${name}" />
+        <button id="go">加入</button>
+      </div>`);
+    document.getElementById("go").onclick = () => {
+      name = document.getElementById("n").value.trim() || "匿名";
+      localStorage.setItem("quiz-name", name);
+      send("join", { id, name });
+      waiting();
+    };
+  };
+  const waiting = () => render(`<div class="card">已加入，等待主持人出题…</div>`);
+
+  const showQ = (m) => {
+    curIdx = m.idx;
+    render(`
+      <div class="card">
+        <div class="muted">第 ${m.idx+1} 题</div>
+        <div class="big">${m.q}</div>
+        <div id="opts">${m.opts.map((o,i)=>
+          `<button class="opt" data-i="${i}">${String.fromCharCode(65+i)}. ${o}</button>`
+        ).join("")}</div>
+        <div id="fb" class="muted"></div>
+      </div>`);
+    document.querySelectorAll(".opt").forEach(b => b.onclick = () => {
+      document.querySelectorAll(".opt").forEach(x => x.disabled = true);
+      b.style.outline = "3px solid #fbbf24";
+      send("answer", { id, idx: curIdx, pick: Number(b.dataset.i), at: Date.now() });
+    });
+  };
+
+  client.on("connect", () => { if (!name) askName(); else { send("join", { id, name }); waiting(); }});
+  client.on("message", (_t, buf) => {
+    const m = JSON.parse(buf.toString());
+    if (m.type === "question") showQ(m);
+    if (m.type === "result" && m.to === id && m.idx === curIdx) {
+      document.querySelectorAll(".opt").forEach(b => {
+        const i = Number(b.dataset.i);
+        if (i === m.answer) b.classList.add("right");
+        else if (b.style.outline) b.classList.add("wrong");
+      });
+      document.getElementById("fb").textContent = m.correct ? "✓ 回答正确" : "✗ 回答错误";
+    }
+  });
+}
+
+if (isPlayer) playerUI(); else hostUI();
+}); // end DOMContentLoaded
+</script>
+</body>
+</html>
