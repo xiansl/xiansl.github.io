@@ -3,236 +3,498 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>现场答题 Demo</title>
+<title>现场答题 · Kahoot 风格</title>
 <script src="./mqtt.min.js"></script>
 <script src="./qrcode.min.js"></script>
-<script>
-  window.addEventListener("DOMContentLoaded", () => {
-    const missing = [];
-    if (typeof mqtt   === "undefined") missing.push("mqtt.min.js");
-    if (typeof QRCode === "undefined") missing.push("qrcode.min.js");
-    if (missing.length) {
-      document.body.innerHTML =
-        `<div style="padding:24px;color:#fca5a5;font-family:system-ui">
-          本地库加载失败：${missing.join(", ")}。<br>
-          请确认这些文件与 quiz.html 在同一目录，且文件名完全一致（区分大小写）。<br>
-          另外请用本地 http server 打开（如 <code>python3 -m http.server</code>），不要用 file:// 直接双击。
-        </div>`;
-    }
-  });
-</script>
 <style>
-  :root { color-scheme: light; }
-  body { font-family: -apple-system, system-ui, sans-serif; margin: 0; padding: 24px;
-         background: #0f172a; color: #e2e8f0; min-height: 100vh; box-sizing: border-box; }
-  h1 { margin-top: 0; }
-  .card { background:#1e293b; border-radius:12px; padding:20px; margin:12px 0; }
-  button { font-size:18px; padding:12px 20px; margin:6px; border:0; border-radius:8px;
-           background:#3b82f6; color:white; cursor:pointer; }
-  button:disabled { background:#475569; cursor:not-allowed; }
-  .opt { display:block; width:100%; text-align:left; margin:8px 0;
-         background:#334155; }
-  .opt.right { background:#16a34a; }
-  .opt.wrong { background:#dc2626; }
-  input { font-size:16px; padding:10px; border-radius:8px; border:1px solid #475569;
-          background:#0f172a; color:#e2e8f0; width: 200px; }
-  table { width:100%; border-collapse:collapse; }
-  td, th { padding:8px; border-bottom:1px solid #334155; text-align:left; }
-  #qr canvas { background:white; padding:12px; border-radius:8px; }
-  .big { font-size:28px; }
-  .muted { color:#94a3b8; font-size:14px; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; min-height: 100vh; }
+  body {
+    font-family: "Montserrat", -apple-system, system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: linear-gradient(135deg,#46178f 0%,#2c0b5c 100%);
+    color: #fff;
+    overflow-x: hidden;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 24px; }
+  h1,h2,h3 { margin: 0 0 12px; font-weight: 800; letter-spacing: 0.5px; }
+  .card {
+    background: rgba(255,255,255,.08);
+    backdrop-filter: blur(10px);
+    border-radius: 20px;
+    padding: 24px;
+    margin: 16px 0;
+    box-shadow: 0 10px 30px rgba(0,0,0,.3);
+  }
+  button {
+    font-family: inherit;
+    font-size: 18px; font-weight: 700;
+    padding: 14px 28px;
+    border: 0; border-radius: 12px;
+    background: #26890c; color: white;
+    cursor: pointer;
+    box-shadow: 0 4px 0 #1a6307;
+    transition: transform .05s;
+  }
+  button:active { transform: translateY(2px); box-shadow: 0 2px 0 #1a6307; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  input {
+    font-family: inherit;
+    font-size: 20px; padding: 14px 18px;
+    border-radius: 12px; border: 0;
+    background: #fff; color: #333;
+    width: 260px; max-width: 100%;
+  }
+
+  /* ===== Lobby ===== */
+  .lobby-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 760px) { .lobby-grid { grid-template-columns: 1fr; } }
+  .pin {
+    font-size: 72px; font-weight: 900; letter-spacing: 8px;
+    background: #fff; color: #46178f; padding: 10px 24px;
+    border-radius: 12px; display: inline-block;
+  }
+  #qr canvas { background: #fff; padding: 14px; border-radius: 12px; display: block; }
+  .players { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; min-height: 60px; }
+  .chip {
+    background: #ff3355; padding: 10px 16px; border-radius: 20px;
+    font-weight: 700; animation: pop .3s ease-out;
+  }
+  @keyframes pop { from { transform: scale(0); } to { transform: scale(1); } }
+
+  /* ===== Question ===== */
+  .q-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .timer {
+    width: 90px; height: 90px; border-radius: 50%;
+    background: #fff; color: #46178f;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 44px; font-weight: 900;
+  }
+  .q-text {
+    background: #fff; color: #333;
+    font-size: 36px; font-weight: 800;
+    padding: 32px; border-radius: 16px; text-align: center;
+    margin-bottom: 20px; min-height: 120px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .opts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .opt {
+    display: flex; align-items: center; gap: 16px;
+    padding: 22px; border-radius: 14px;
+    font-size: 22px; font-weight: 700; color: #fff;
+    cursor: pointer; border: 0; text-align: left;
+    box-shadow: 0 6px 0 rgba(0,0,0,.25);
+    min-height: 90px;
+  }
+  .opt .shape { font-size: 28px; }
+  .opt.c0 { background: #e21b3c; } /* red triangle */
+  .opt.c1 { background: #1368ce; } /* blue diamond */
+  .opt.c2 { background: #d89e00; } /* yellow circle */
+  .opt.c3 { background: #26890c; } /* green square */
+  .opt.dim { opacity: .3; }
+  .opt.hit { outline: 6px solid #fff; }
+
+  /* ===== Reveal / Scoreboard ===== */
+  .bars { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; align-items: end; height: 220px; margin-top: 20px; }
+  .bar { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+  .bar .fill { width: 100%; border-radius: 10px 10px 0 0; transition: height .8s ease-out; min-height: 4px; }
+  .bar .lbl { margin-top: 8px; font-weight: 700; }
+  .bar.c0 .fill { background: #e21b3c; }
+  .bar.c1 .fill { background: #1368ce; }
+  .bar.c2 .fill { background: #d89e00; }
+  .bar.c3 .fill { background: #26890c; }
+  .bar.correct .fill { outline: 4px solid #fff; }
+
+  .leaderboard { list-style: none; padding: 0; margin: 0; }
+  .leaderboard li {
+    display: flex; justify-content: space-between; align-items: center;
+    background: rgba(255,255,255,.12); padding: 14px 20px; border-radius: 12px;
+    margin-bottom: 10px; font-size: 20px; font-weight: 700;
+    animation: slide .4s ease-out;
+  }
+  @keyframes slide { from { transform: translateX(-20px); opacity: 0; } to { transform: none; opacity: 1; } }
+  .leaderboard .rank { background: #ffc800; color: #46178f; width: 36px; height: 36px; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center; margin-right: 12px; }
+
+  /* ===== Podium ===== */
+  .podium { display: flex; justify-content: center; align-items: flex-end; gap: 20px; margin-top: 30px; }
+  .pod {
+    flex: 0 0 180px; text-align: center;
+    background: rgba(255,255,255,.15); border-radius: 14px 14px 0 0;
+    padding: 20px; font-weight: 800;
+  }
+  .pod .nm { font-size: 24px; margin-bottom: 8px; }
+  .pod .sc { font-size: 20px; color: #ffc800; }
+  .pod.p1 { height: 240px; background: linear-gradient(180deg,#ffd700,#b8860b); }
+  .pod.p2 { height: 190px; background: linear-gradient(180deg,#c0c0c0,#808080); }
+  .pod.p3 { height: 150px; background: linear-gradient(180deg,#cd7f32,#8b4513); }
+
+  /* ===== Player (mobile) ===== */
+  .player-opts { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 20px; }
+  .player-opts .opt { min-height: 120px; justify-content: center; font-size: 32px; }
+  .big-feedback { text-align: center; padding: 40px 20px; }
+  .big-feedback .ic { font-size: 100px; font-weight: 900; margin-bottom: 10px; }
+  .big-feedback.ok { background: #26890c; }
+  .big-feedback.no { background: #e21b3c; }
+  .score-pill {
+    display: inline-block; background: #ffc800; color: #46178f;
+    padding: 10px 24px; border-radius: 40px; font-size: 24px; font-weight: 800;
+    margin-top: 10px;
+  }
+  .muted { color: #c7b8e0; font-size: 14px; }
 </style>
 </head>
 <body>
-<div id="app"></div>
+<div class="wrap"><div id="app">加载中…</div></div>
 
 <script>
 window.addEventListener("DOMContentLoaded", () => {
-  if (typeof mqtt === "undefined" || typeof QRCode === "undefined") return;
-// ---------- 配置 ----------
-// 公共 MQTT broker（EMQX 提供的免费测试节点，WebSocket over TLS）
-// 现场使用建议改成自己的 broker，或至少把 ROOM_ID 做成不可猜的随机串。
-const BROKER = "wss://broker.emqx.io:8084/mqtt";
-const ROOM_ID = new URLSearchParams(location.search).get("room")
-             || (location.hash.match(/room=([^&]+)/)?.[1])
-             || "demo-" + Math.random().toString(36).slice(2, 8);
-const TOPIC = `quiz-demo/${ROOM_ID}`;
+  if (typeof mqtt === "undefined" || typeof QRCode === "undefined") {
+    document.getElementById("app").innerHTML =
+      '<div class="card">本地库加载失败，请确认 mqtt.min.js 与 qrcode.min.js 与 quiz.html 同目录。</div>';
+    return;
+  }
 
-const QUESTIONS = [
-  { q: "1 + 1 = ?",            opts: ["1","2","3","4"], answer: 1 },
-  { q: "HTTP 默认端口是?",      opts: ["21","22","80","443"], answer: 2 },
-  { q: "下列哪个是 JS 关键字?", opts: ["function","method","sub","def"], answer: 0 },
-];
+  // ---------- 配置 ----------
+  const BROKER = "wss://broker.emqx.io:8084/mqtt";
+  const params = new URLSearchParams(location.search);
+  const ROOM_ID = params.get("room")
+               || (location.hash.match(/room=([^&]+)/)?.[1])
+               || "demo-" + Math.random().toString(36).slice(2, 8);
+  const TOPIC = `quiz-kahoot/${ROOM_ID}`;
 
-// ---------- 角色判定 ----------
-// 带 #player 的是手机端；默认是主屏。
-const isPlayer = location.hash.startsWith("#player");
+  // Kahoot 风格的 3 道题
+  const QUESTIONS = [
+    { q: "Kahoot 诞生于哪个国家？",
+      opts: ["美国", "挪威", "芬兰", "瑞典"], answer: 1, time: 20 },
+    { q: "下列哪个 HTTP 状态码表示“未找到”？",
+      opts: ["200", "301", "404", "500"], answer: 2, time: 20 },
+    { q: "JavaScript 中，typeof null 的结果是？",
+      opts: ["\"null\"", "\"undefined\"", "\"object\"", "\"number\""], answer: 2, time: 20 },
+  ];
+  const SHAPES = ["▲","◆","●","■"];
 
-// ---------- 共用 MQTT ----------
-const client = mqtt.connect(BROKER, { clean: true, reconnectPeriod: 2000 });
-const send = (type, data) => client.publish(TOPIC, JSON.stringify({ type, ...data }));
-client.on("connect", () => client.subscribe(TOPIC));
+  // Kahoot 评分公式：答对得分 = round(1000 * (1 - (用时/总时长) / 2))，答错 0 分
+  const scoreOf = (correct, usedMs, totalMs) =>
+    correct ? Math.round(1000 * (1 - (usedMs / totalMs) / 2)) : 0;
 
-// ---------- 主屏 ----------
-function hostUI() {
+  const isPlayer = location.hash.startsWith("#player");
+  const client = mqtt.connect(BROKER, { clean: true, reconnectPeriod: 2000 });
+  const send = (type, data) => client.publish(TOPIC, JSON.stringify({ type, ...data }));
+  client.on("connect", () => client.subscribe(TOPIC));
+
   const app = document.getElementById("app");
-  app.innerHTML = `
-    <h1>现场答题 · 主屏</h1>
-    <div class="card">
-      <div>房间号：<b>${ROOM_ID}</b></div>
-      <div class="muted">手机扫码加入 ↓</div>
-      <div id="qr"></div>
-    </div>
-    <div class="card">
-      <div>已加入：<b id="count">0</b> 人</div>
-      <button id="start">开始 / 下一题</button>
-    </div>
-    <div class="card" id="qbox" style="display:none">
-      <div class="big" id="qtext"></div>
-      <ol id="qopts"></ol>
-      <div id="stat" class="muted"></div>
-    </div>
-    <div class="card">
-      <h3>排行榜</h3>
-      <table><thead><tr><th>#</th><th>昵称</th><th>得分</th><th>最后答题时间</th></tr></thead>
-      <tbody id="board"></tbody></table>
-    </div>
-  `;
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
-  const joinUrl = location.origin + location.pathname + `#player&room=${ROOM_ID}`;
-  QRCode.toCanvas(joinUrl, { width: 240 }, (err, canvas) => {
-    document.getElementById("qr").appendChild(canvas);
-  });
+  // ============================================================
+  // HOST
+  // ============================================================
+  function hostUI() {
+    const players = new Map();   // id -> { name, score, lastGain }
+    let state = "lobby";         // lobby | question | reveal | podium
+    let qIdx = -1;
+    let qStartAt = 0;
+    let qTimer = null;
+    const answers = new Map();   // for current q: id -> { pick, correct, usedMs, gain }
 
-  const players = new Map(); // id -> {name, score, lastAt}
-  let qIdx = -1;
-  let qStartAt = 0;
-  const answers = new Map(); // for current question: id -> {correct, at}
+    renderLobby();
 
-  const refreshBoard = () => {
-    const rows = [...players.entries()]
-      .sort((a,b) => b[1].score - a[1].score || a[1].lastAt - b[1].lastAt);
-    document.getElementById("board").innerHTML = rows.map(([id,p],i) =>
-      `<tr><td>${i+1}</td><td>${p.name}</td><td>${p.score}</td>
-       <td>${p.lastAt ? ((p.lastAt-0)/1000).toFixed(1)+'s' : '-'}</td></tr>`
-    ).join("");
-    document.getElementById("count").textContent = players.size;
-  };
-
-  client.on("message", (_t, buf) => {
-    const m = JSON.parse(buf.toString());
-    if (m.type === "join") {
-      if (!players.has(m.id)) players.set(m.id, { name: m.name, score: 0, lastAt: 0 });
-      // 回播当前题，便于迟到者
-      if (qIdx >= 0) send("question", { idx: qIdx, q: QUESTIONS[qIdx].q, opts: QUESTIONS[qIdx].opts });
-      refreshBoard();
-    }
-    if (m.type === "answer" && m.idx === qIdx && !answers.has(m.id)) {
-      const correct = m.pick === QUESTIONS[qIdx].answer;
-      const dt = m.at - qStartAt;
-      answers.set(m.id, { correct, dt });
-      const p = players.get(m.id);
-      if (p) {
-        // 评分：答对得分，越早分越高
-        if (correct) {
-          const order = [...answers.values()].filter(a => a.correct).length;
-          p.score += Math.max(100 - (order-1)*10, 10);
-        }
-        p.lastAt = dt;
-      }
-      // 把判定回送给该玩家
-      send("result", { to: m.id, idx: qIdx, correct, answer: QUESTIONS[qIdx].answer });
-      updateStat();
-      refreshBoard();
-    }
-  });
-
-  const updateStat = () => {
-    const total = answers.size;
-    const right = [...answers.values()].filter(a => a.correct).length;
-    document.getElementById("stat").textContent =
-      `已答 ${total} / ${players.size}，正确 ${right}（${total ? Math.round(right/total*100):0}%）`;
-  };
-
-  document.getElementById("start").onclick = () => {
-    qIdx++;
-    if (qIdx >= QUESTIONS.length) {
-      alert("答题结束！");
-      qIdx = QUESTIONS.length - 1;
-      return;
-    }
-    answers.clear();
-    qStartAt = Date.now();
-    const q = QUESTIONS[qIdx];
-    document.getElementById("qbox").style.display = "";
-    document.getElementById("qtext").textContent = `第 ${qIdx+1} 题：${q.q}`;
-    document.getElementById("qopts").innerHTML =
-      q.opts.map((o,i) => `<li>${o}</li>`).join("");
-    updateStat();
-    send("question", { idx: qIdx, q: q.q, opts: q.opts });
-  };
-}
-
-// ---------- 手机端 ----------
-function playerUI() {
-  const app = document.getElementById("app");
-  const id = Math.random().toString(36).slice(2, 10);
-  let name = localStorage.getItem("quiz-name") || "";
-  let curIdx = -1;
-
-  const render = (inner) => app.innerHTML = `<h1>答题 · 房间 ${ROOM_ID}</h1>${inner}`;
-
-  const askName = () => {
-    render(`
-      <div class="card">
-        <div>输入昵称加入：</div>
-        <input id="n" value="${name}" />
-        <button id="go">加入</button>
-      </div>`);
-    document.getElementById("go").onclick = () => {
-      name = document.getElementById("n").value.trim() || "匿名";
-      localStorage.setItem("quiz-name", name);
-      send("join", { id, name });
-      waiting();
-    };
-  };
-  const waiting = () => render(`<div class="card">已加入，等待主持人出题…</div>`);
-
-  const showQ = (m) => {
-    curIdx = m.idx;
-    render(`
-      <div class="card">
-        <div class="muted">第 ${m.idx+1} 题</div>
-        <div class="big">${m.q}</div>
-        <div id="opts">${m.opts.map((o,i)=>
-          `<button class="opt" data-i="${i}">${String.fromCharCode(65+i)}. ${o}</button>`
-        ).join("")}</div>
-        <div id="fb" class="muted"></div>
-      </div>`);
-    document.querySelectorAll(".opt").forEach(b => b.onclick = () => {
-      document.querySelectorAll(".opt").forEach(x => x.disabled = true);
-      b.style.outline = "3px solid #fbbf24";
-      send("answer", { id, idx: curIdx, pick: Number(b.dataset.i), at: Date.now() });
-    });
-  };
-
-  client.on("connect", () => { if (!name) askName(); else { send("join", { id, name }); waiting(); }});
-  client.on("message", (_t, buf) => {
-    const m = JSON.parse(buf.toString());
-    if (m.type === "question") showQ(m);
-    if (m.type === "result" && m.to === id && m.idx === curIdx) {
-      document.querySelectorAll(".opt").forEach(b => {
-        const i = Number(b.dataset.i);
-        if (i === m.answer) b.classList.add("right");
-        else if (b.style.outline) b.classList.add("wrong");
+    function renderLobby() {
+      state = "lobby";
+      app.innerHTML = `
+        <div class="card">
+          <h1>🎯 现场答题</h1>
+          <div class="lobby-grid">
+            <div>
+              <div class="muted">用手机扫码加入</div>
+              <div id="qr" style="margin:12px 0"></div>
+              <div class="muted">房间 PIN</div>
+              <div class="pin">${esc(ROOM_ID)}</div>
+            </div>
+            <div>
+              <h2>已加入 <span id="count">0</span> 人</h2>
+              <div id="players" class="players"></div>
+              <button id="start" style="margin-top:20px;font-size:22px" disabled>开始答题</button>
+              <div class="muted" style="margin-top:8px">至少 1 人才能开始 · 共 ${QUESTIONS.length} 题</div>
+            </div>
+          </div>
+        </div>`;
+      const joinUrl = location.origin + location.pathname + `#player&room=${ROOM_ID}`;
+      QRCode.toCanvas(joinUrl, { width: 240, margin: 1 }, (err, canvas) => {
+        if (!err) document.getElementById("qr").appendChild(canvas);
       });
-      document.getElementById("fb").textContent = m.correct ? "✓ 回答正确" : "✗ 回答错误";
+      refreshPlayers();
+      document.getElementById("start").onclick = nextQuestion;
     }
-  });
-}
 
-if (isPlayer) playerUI(); else hostUI();
-}); // end DOMContentLoaded
+    function refreshPlayers() {
+      const box = document.getElementById("players");
+      const cnt = document.getElementById("count");
+      if (!box) return;
+      box.innerHTML = [...players.values()]
+        .map(p => `<div class="chip">${esc(p.name)}</div>`).join("");
+      cnt.textContent = players.size;
+      const startBtn = document.getElementById("start");
+      if (startBtn) startBtn.disabled = players.size === 0;
+    }
+
+    function nextQuestion() {
+      qIdx++;
+      if (qIdx >= QUESTIONS.length) return renderPodium();
+      answers.clear();
+      qStartAt = Date.now();
+      const q = QUESTIONS[qIdx];
+      state = "question";
+      app.innerHTML = `
+        <div class="card">
+          <div class="q-head">
+            <h2>第 ${qIdx+1} / ${QUESTIONS.length} 题</h2>
+            <div class="timer" id="timer">${q.time}</div>
+          </div>
+          <div class="q-text">${esc(q.q)}</div>
+          <div class="opts-grid">
+            ${q.opts.map((o,i) => `
+              <div class="opt c${i}"><span class="shape">${SHAPES[i]}</span><span>${esc(o)}</span></div>
+            `).join("")}
+          </div>
+          <div style="text-align:center;margin-top:20px;font-size:20px">
+            已作答 <b id="ansCount">0</b> / ${players.size}
+          </div>
+        </div>`;
+      send("question", { idx: qIdx, q: q.q, opts: q.opts, time: q.time, startAt: qStartAt });
+
+      let remain = q.time;
+      const tick = () => {
+        remain--;
+        const t = document.getElementById("timer");
+        if (t) t.textContent = Math.max(remain, 0);
+        if (remain <= 0 || answers.size >= players.size) {
+          clearInterval(qTimer);
+          setTimeout(renderReveal, 500);
+        }
+      };
+      qTimer = setInterval(tick, 1000);
+    }
+
+    function renderReveal() {
+      state = "reveal";
+      const q = QUESTIONS[qIdx];
+      const counts = [0,0,0,0];
+      for (const a of answers.values()) counts[a.pick]++;
+      const max = Math.max(1, ...counts);
+      send("reveal", { idx: qIdx, answer: q.answer, counts });
+
+      app.innerHTML = `
+        <div class="card">
+          <h2>答案揭晓</h2>
+          <div class="q-text">${esc(q.q)}</div>
+          <div class="bars">
+            ${counts.map((n,i) => `
+              <div class="bar c${i}${i===q.answer?' correct':''}">
+                <div class="fill" style="height:${(n/max)*100}%"></div>
+                <div class="lbl">${SHAPES[i]} ${esc(q.opts[i])} · ${n}</div>
+              </div>`).join("")}
+          </div>
+          <div style="text-align:center;margin-top:24px">
+            <span style="font-size:22px">正确答案：<b>${SHAPES[q.answer]} ${esc(q.opts[q.answer])}</b></span>
+          </div>
+          <div style="text-align:center;margin-top:20px">
+            <button id="next">${qIdx+1 < QUESTIONS.length ? "查看排行榜" : "查看最终结果"}</button>
+          </div>
+        </div>`;
+      document.getElementById("next").onclick = renderScoreboard;
+    }
+
+    function renderScoreboard() {
+      state = "scoreboard";
+      const rows = [...players.entries()]
+        .map(([id,p]) => ({ id, ...p, gain: answers.get(id)?.gain || 0 }))
+        .sort((a,b) => b.score - a.score);
+      send("scoreboard", { rows: rows.map(r => ({ name: r.name, score: r.score, gain: r.gain })) });
+
+      app.innerHTML = `
+        <div class="card">
+          <h2>${qIdx+1 < QUESTIONS.length ? "当前排行榜" : "最终排名"}</h2>
+          <ul class="leaderboard">
+            ${rows.slice(0,10).map((r,i) => `
+              <li>
+                <span><span class="rank">${i+1}</span>${esc(r.name)}</span>
+                <span>${r.score} ${r.gain ? `<span style="color:#ffc800;font-size:16px">+${r.gain}</span>` : ""}</span>
+              </li>`).join("") || '<li>暂无玩家</li>'}
+          </ul>
+          <div style="text-align:center;margin-top:20px">
+            <button id="next">${qIdx+1 < QUESTIONS.length ? "下一题" : "查看冠军"}</button>
+          </div>
+        </div>`;
+      document.getElementById("next").onclick = () => {
+        if (qIdx+1 >= QUESTIONS.length) renderPodium(); else nextQuestion();
+      };
+    }
+
+    function renderPodium() {
+      state = "podium";
+      const top = [...players.values()].sort((a,b) => b.score - a.score).slice(0,3);
+      const [p1,p2,p3] = top;
+      send("podium", { top: top.map(p => ({ name: p.name, score: p.score })) });
+      app.innerHTML = `
+        <div class="card" style="text-align:center">
+          <h1>🏆 冠军诞生！</h1>
+          <div class="podium">
+            ${p2 ? `<div class="pod p2"><div class="nm">${esc(p2.name)}</div><div class="sc">${p2.score}</div><div style="font-size:40px">🥈</div></div>` : ""}
+            ${p1 ? `<div class="pod p1"><div class="nm">${esc(p1.name)}</div><div class="sc">${p1.score}</div><div style="font-size:50px">🥇</div></div>` : ""}
+            ${p3 ? `<div class="pod p3"><div class="nm">${esc(p3.name)}</div><div class="sc">${p3.score}</div><div style="font-size:40px">🥉</div></div>` : ""}
+          </div>
+          <button style="margin-top:30px" onclick="location.reload()">再来一局</button>
+        </div>`;
+    }
+
+    client.on("message", (_t, buf) => {
+      let m; try { m = JSON.parse(buf.toString()); } catch { return; }
+      if (m.type === "join") {
+        if (!players.has(m.id)) {
+          players.set(m.id, { name: m.name, score: 0, lastGain: 0 });
+          if (state === "lobby") refreshPlayers();
+        }
+        send("joined", { to: m.id, state, qIdx });
+      }
+      if (m.type === "answer" && state === "question" && m.idx === qIdx && !answers.has(m.id)) {
+        const q = QUESTIONS[qIdx];
+        const usedMs = Date.now() - qStartAt;
+        const totalMs = q.time * 1000;
+        const correct = m.pick === q.answer;
+        const gain = scoreOf(correct, Math.min(usedMs, totalMs), totalMs);
+        const p = players.get(m.id);
+        if (p) { p.score += gain; p.lastGain = gain; }
+        answers.set(m.id, { pick: m.pick, correct, usedMs, gain });
+        send("ack", { to: m.id, idx: qIdx, correct, gain, score: p?.score || 0, answer: q.answer });
+        const ac = document.getElementById("ansCount");
+        if (ac) ac.textContent = answers.size;
+        if (answers.size >= players.size) {
+          clearInterval(qTimer);
+          setTimeout(renderReveal, 500);
+        }
+      }
+    });
+  }
+
+  // ============================================================
+  // PLAYER
+  // ============================================================
+  function playerUI() {
+    const id = Math.random().toString(36).slice(2, 10);
+    let name = localStorage.getItem("quiz-name") || "";
+    let myScore = 0;
+    let curIdx = -1;
+    let curQ = null;
+
+    const askName = () => {
+      app.innerHTML = `
+        <div class="card" style="text-align:center">
+          <h1>加入房间</h1>
+          <div class="pin" style="font-size:36px">${esc(ROOM_ID)}</div>
+          <div style="margin:20px 0">
+            <input id="n" placeholder="输入昵称" value="${esc(name)}" maxlength="16" />
+          </div>
+          <button id="go">进入</button>
+        </div>`;
+      const go = () => {
+        name = (document.getElementById("n").value || "").trim() || "匿名";
+        localStorage.setItem("quiz-name", name);
+        send("join", { id, name });
+        waiting();
+      };
+      document.getElementById("go").onclick = go;
+      document.getElementById("n").addEventListener("keydown", e => { if (e.key === "Enter") go(); });
+    };
+
+    const waiting = (msg) => {
+      app.innerHTML = `
+        <div class="card" style="text-align:center">
+          <h2>${esc(name)}</h2>
+          <div class="score-pill">${myScore} 分</div>
+          <div style="margin-top:30px;font-size:20px">${msg || "等待主持人出题…"}</div>
+        </div>`;
+    };
+
+    const showQ = (m) => {
+      curIdx = m.idx; curQ = m;
+      app.innerHTML = `
+        <div class="card">
+          <div class="q-head">
+            <h2>第 ${m.idx+1} 题</h2>
+            <div class="score-pill">${myScore}</div>
+          </div>
+          <div style="text-align:center;margin:16px 0;font-size:18px">选择你的答案</div>
+          <div class="player-opts">
+            ${m.opts.map((_,i) => `<button class="opt c${i}" data-i="${i}">${SHAPES[i]}</button>`).join("")}
+          </div>
+        </div>`;
+      document.querySelectorAll(".opt").forEach(b => {
+        b.onclick = () => {
+          document.querySelectorAll(".opt").forEach(x => {
+            x.disabled = true;
+            if (x !== b) x.classList.add("dim");
+          });
+          b.classList.add("hit");
+          send("answer", { id, idx: curIdx, pick: Number(b.dataset.i) });
+          setTimeout(() => waiting("已提交，等待其他人作答…"), 400);
+        };
+      });
+    };
+
+    const showResult = (m) => {
+      myScore = m.score;
+      app.innerHTML = `
+        <div class="card big-feedback ${m.correct ? "ok" : "no"}">
+          <div class="ic">${m.correct ? "✓" : "✗"}</div>
+          <h2>${m.correct ? "回答正确！" : "回答错误"}</h2>
+          ${m.correct ? `<div class="score-pill">+${m.gain}</div>` : ""}
+          <div style="margin-top:20px;font-size:20px">总分：<b>${myScore}</b></div>
+        </div>`;
+    };
+
+    const showScoreboard = (m) => {
+      const me = m.rows.findIndex(r => r.name === name);
+      app.innerHTML = `
+        <div class="card" style="text-align:center">
+          <h2>${esc(name)}</h2>
+          <div class="score-pill">${myScore} 分</div>
+          <div style="margin-top:20px;font-size:20px">
+            ${me >= 0 ? `当前排名第 <b>${me+1}</b> 名` : "等待下一题…"}
+          </div>
+        </div>`;
+    };
+
+    const showPodium = (m) => {
+      const me = m.top.findIndex(p => p.name === name);
+      app.innerHTML = `
+        <div class="card" style="text-align:center">
+          <h1>🏁 答题结束</h1>
+          <div class="score-pill" style="font-size:28px">${myScore} 分</div>
+          <div style="margin-top:20px;font-size:20px">
+            ${me === 0 ? "🥇 恭喜你赢得冠军！" :
+              me === 1 ? "🥈 第二名，不错！" :
+              me === 2 ? "🥉 第三名，上台领奖！" :
+              "感谢参与，期待下次挑战！"}
+          </div>
+        </div>`;
+    };
+
+    client.on("connect", () => {
+      if (!name) askName(); else { send("join", { id, name }); waiting(); }
+    });
+    client.on("message", (_t, buf) => {
+      let m; try { m = JSON.parse(buf.toString()); } catch { return; }
+      if (m.to && m.to !== id) return;
+      if (m.type === "question") showQ(m);
+      else if (m.type === "ack")        showResult(m);
+      else if (m.type === "scoreboard") showScoreboard(m);
+      else if (m.type === "podium")     showPodium(m);
+      else if (m.type === "reveal")     { /* 保留当前结果画面 */ }
+    });
+  }
+
+  if (isPlayer) playerUI(); else hostUI();
+});
 </script>
 </body>
 </html>
