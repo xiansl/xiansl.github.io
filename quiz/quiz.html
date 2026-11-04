@@ -142,61 +142,6 @@
 <body>
 <div class="wrap"><div id="app">加载中…</div></div>
 
-<div id="debug" style="position:fixed;bottom:0;left:0;right:0;background:#000c;color:#9fe;font:12px/1.5 monospace;padding:8px 12px;max-height:40vh;overflow:auto;z-index:9999;white-space:pre-wrap;border-top:2px solid #0ff">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-    <b style="color:#fff">🔧 诊断信息（现场部署后可删除整个 #debug 块）</b>
-    <button onclick="document.getElementById('debug').style.display='none'" style="font-size:11px;padding:2px 8px;background:#333;color:#fff;box-shadow:none">隐藏</button>
-  </div>
-  <div id="debug-log"></div>
-</div>
-
-<script>
-// ============ 诊断脚本（独立于主逻辑，第一时间加载）============
-(function() {
-  const log = (msg, color) => {
-    const el = document.getElementById("debug-log");
-    if (!el) return;
-    const line = document.createElement("div");
-    line.style.color = color || "#9fe";
-    line.textContent = `[${new Date().toISOString().slice(11,19)}] ${msg}`;
-    el.appendChild(line);
-    el.scrollTop = el.scrollHeight;
-  };
-  window.__dbg = log;
-
-  log("页面开始加载");
-  log("URL: " + location.href);
-  log("hash: " + (location.hash || "(空)"));
-  log("search: " + (location.search || "(空)"));
-  log("角色判定: " + (location.hash.startsWith("#player") ? "👤 玩家 (player)" : "📺 主机 (host)"));
-  log("UA: " + navigator.userAgent.slice(0, 80));
-
-  window.addEventListener("error", e => {
-    log("❌ JS 错误: " + e.message + " @ " + (e.filename||"?") + ":" + (e.lineno||"?"), "#f88");
-  });
-  window.addEventListener("unhandledrejection", e => {
-    log("❌ Promise 拒绝: " + (e.reason?.message || e.reason), "#f88");
-  });
-
-  // 检查两个 js 是否加载成功
-  window.addEventListener("DOMContentLoaded", () => {
-    setTimeout(() => {
-      const mqttOK   = typeof window.mqtt   !== "undefined";
-      const qrOK     = typeof window.QRCode !== "undefined";
-      log("mqtt.min.js:   " + (mqttOK ? "✅ 已加载" : "❌ 未加载（检查文件名大小写 / 404）"), mqttOK ? "#9f9" : "#f88");
-      log("qrcode.min.js: " + (qrOK   ? "✅ 已加载" : "❌ 未加载（检查文件名大小写 / 404）"), qrOK   ? "#9f9" : "#f88");
-
-      // 用 fetch 主动探测两个文件是否 404
-      ["./mqtt.min.js", "./qrcode.min.js"].forEach(url => {
-        fetch(url, { method: "HEAD" })
-          .then(r => log(`HEAD ${url} → ${r.status}`, r.ok ? "#9f9" : "#f88"))
-          .catch(e => log(`HEAD ${url} → 失败: ${e.message}`, "#f88"));
-      });
-    }, 100);
-  });
-})();
-</script>
-
 <script>
 window.addEventListener("DOMContentLoaded", () => {
   if (typeof mqtt === "undefined" || typeof QRCode === "undefined") {
@@ -230,22 +175,10 @@ window.addEventListener("DOMContentLoaded", () => {
   const SHAPES = ["▲","◆","●","■"];
 
   const isPlayer = location.hash.startsWith("#player");
-  window.__dbg && window.__dbg("ROOM_ID = " + ROOM_ID);
-  window.__dbg && window.__dbg("TOPIC = " + TOPIC);
-  window.__dbg && window.__dbg("即将连接 broker: " + BROKER);
 
   const client = mqtt.connect(BROKER, { clean: true, reconnectPeriod: 2000 });
   const send = (type, data) => client.publish(TOPIC, JSON.stringify({ type, ...data }));
-  client.on("connect", () => {
-    window.__dbg && window.__dbg("✅ MQTT 已连接", "#9f9");
-    client.subscribe(TOPIC, err => {
-      window.__dbg && window.__dbg(err ? "❌ 订阅失败: " + err.message : "✅ 已订阅 " + TOPIC, err ? "#f88" : "#9f9");
-    });
-  });
-  client.on("error",     e  => window.__dbg && window.__dbg("❌ MQTT 错误: " + e.message, "#f88"));
-  client.on("reconnect", () => window.__dbg && window.__dbg("⏳ MQTT 重连中…", "#fc9"));
-  client.on("close",     () => window.__dbg && window.__dbg("⚠️ MQTT 连接关闭", "#fc9"));
-  client.on("offline",   () => window.__dbg && window.__dbg("⚠️ MQTT 离线", "#fc9"));
+  client.on("connect", () => client.subscribe(TOPIC));
 
   const app = document.getElementById("app");
   const esc = s => String(s==null?"":s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -663,8 +596,7 @@ window.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  if (isPlayer) { window.__dbg && window.__dbg("进入 playerUI()"); playerUI(); }
-  else           { window.__dbg && window.__dbg("进入 hostUI()");   hostUI();   }
+  if (isPlayer) playerUI(); else hostUI();
 });
 </script>
 </body>
